@@ -13,6 +13,7 @@ import os
 
 # Force the local file fallback so the test runs without DynamoDB.
 os.environ["DYNAMODB_TABLE_NAME"] = ""
+os.environ["SNS_TOPIC_ARN"] = ""
 os.environ["LOCAL_FALLBACK_ENABLED"] = "true"
 
 from handler import lambda_handler
