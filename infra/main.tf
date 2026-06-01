@@ -1,20 +1,12 @@
 # Banking Fraud Alert System - core AWS infrastructure.
 #
-# This Terraform provisions the asynchronous "flagged transaction" pipeline:
+# This Terraform provisions the fraud detection API and asynchronous
+# "flagged transaction" pipeline:
 #
-#     FastAPI transaction service  ->  SQS  ->  Lambda  ->  DynamoDB
+#     ALB  ->  ECS Fargate API  ->  SQS  ->  Lambda  ->  DynamoDB + SNS
 #
-# Scope note (intentional):
-#   The transaction-scoring API is container-ready through Docker (see the root
-#   Dockerfile and docker-compose.yml). In production, that container is intended
-#   to run on ECS Fargate behind an Application Load Balancer.
-#
-#   The ECS/Fargate deployment extension would include an ECS cluster, task
-#   definition, Fargate service, ALB, target group, security groups, and an IAM
-#   task role with sqs:SendMessage permission for this queue. Those resources
-#   are deliberately documented instead of generated here to keep the assignment
-#   focused on the event-driven fraud-alert path. They can be layered on later
-#   without changing the core pipeline below.
+# It uses the default VPC and default public subnets for a compact assignment
+# deployment. No custom VPC or NAT Gateway is created.
 
 terraform {
   required_version = ">= 1.3.0"
@@ -33,6 +25,29 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+}
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# ---------------------------------------------------------------------------
+# ECR repository for the FastAPI container image
+# ---------------------------------------------------------------------------
+resource "aws_ecr_repository" "api" {
+  name                 = var.project_name
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -73,6 +88,230 @@ resource "aws_dynamodb_table" "flagged_transactions" {
 }
 
 # ---------------------------------------------------------------------------
+# SNS topic for fraud alerts
+# ---------------------------------------------------------------------------
+resource "aws_sns_topic" "fraud_alerts" {
+  name = "${var.project_name}-fraud-alerts"
+}
+
+# ---------------------------------------------------------------------------
+# ECS and ALB networking
+# ---------------------------------------------------------------------------
+resource "aws_security_group" "alb" {
+  name        = "${var.project_name}-alb-sg"
+  description = "Allow public HTTP traffic to the API load balancer."
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "HTTP from the internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "ecs_tasks" {
+  name        = "${var.project_name}-ecs-tasks-sg"
+  description = "Allow ALB traffic to the ECS API tasks."
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description     = "API traffic from ALB"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    description = "Outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb" "api" {
+  name               = "${var.project_name}-alb"
+  load_balancer_type = "application"
+  internal           = false
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = data.aws_subnets.default.ids
+}
+
+resource "aws_lb_target_group" "api" {
+  name        = "${var.project_name}-tg"
+  port        = 8000
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = data.aws_vpc.default.id
+
+  health_check {
+    enabled = true
+    path    = "/health"
+  }
+}
+
+resource "aws_lb_listener" "api_http" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+}
+
+# ---------------------------------------------------------------------------
+# ECS cluster, roles, task definition, and service
+# ---------------------------------------------------------------------------
+resource "aws_ecs_cluster" "api" {
+  name = "${var.project_name}-cluster"
+}
+
+resource "aws_cloudwatch_log_group" "api" {
+  name              = "/ecs/${var.project_name}/fraud-api"
+  retention_in_days = 14
+}
+
+data "aws_iam_policy_document" "ecs_tasks_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  name               = "${var.project_name}-ecs-execution-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "ecs_task" {
+  name               = "${var.project_name}-ecs-task-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
+}
+
+data "aws_iam_policy_document" "ecs_task_permissions" {
+  statement {
+    sid       = "SendFlaggedTransactions"
+    effect    = "Allow"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.flagged_transactions.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task" {
+  name   = "${var.project_name}-ecs-task-policy"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_task_permissions.json
+}
+
+resource "aws_ecs_task_definition" "api" {
+  family                   = var.project_name
+  cpu                      = "256"
+  memory                   = "512"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "fraud-api"
+      image     = var.api_image_uri
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = 8000
+          hostPort      = 8000
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "APP_NAME"
+          value = "Banking Fraud Detection API"
+        },
+        {
+          name  = "ENVIRONMENT"
+          value = "aws"
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.aws_region
+        },
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.flagged_transactions.url
+        },
+        {
+          name  = "DYNAMODB_TABLE_NAME"
+          value = aws_dynamodb_table.flagged_transactions.name
+        },
+        {
+          name  = "LOCAL_FALLBACK_ENABLED"
+          value = "false"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.api.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "api" {
+  name            = "${var.project_name}-service"
+  cluster         = aws_ecs_cluster.api.id
+  task_definition = aws_ecs_task_definition.api.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = data.aws_subnets.default.ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api.arn
+    container_name   = "fraud-api"
+    container_port   = 8000
+  }
+
+  depends_on = [aws_lb_listener.api_http]
+}
+
+# ---------------------------------------------------------------------------
 # IAM role for the Lambda function
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "lambda_assume_role" {
@@ -93,7 +332,7 @@ resource "aws_iam_role" "lambda" {
 }
 
 # ---------------------------------------------------------------------------
-# IAM policy: SQS read + DynamoDB write + CloudWatch Logs
+# IAM policy: SQS read + DynamoDB write + SNS publish + CloudWatch Logs
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "lambda_permissions" {
   # Read messages from the SQS queue (required for the event source mapping).
@@ -110,14 +349,18 @@ data "aws_iam_policy_document" "lambda_permissions" {
 
   # Write flagged transactions to DynamoDB.
   statement {
-    sid    = "WriteToDynamoDB"
-    effect = "Allow"
-    actions = [
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-      "dynamodb:BatchWriteItem",
-    ]
+    sid       = "WriteToDynamoDB"
+    effect    = "Allow"
+    actions   = ["dynamodb:PutItem"]
     resources = [aws_dynamodb_table.flagged_transactions.arn]
+  }
+
+  # Publish fraud alert notifications.
+  statement {
+    sid       = "PublishFraudAlerts"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.fraud_alerts.arn]
   }
 
   # Write logs to CloudWatch Logs.
@@ -180,10 +423,11 @@ resource "aws_lambda_function" "processor" {
 
   environment {
     variables = {
-      # AWS_REGION is reserved and injected by the Lambda runtime, so it is
-      # not set here. The handler reads it automatically.
+      AWS_REGION             = var.aws_region
+      ENVIRONMENT            = "aws"
       DYNAMODB_TABLE_NAME    = aws_dynamodb_table.flagged_transactions.name
       LOCAL_FALLBACK_ENABLED = "false"
+      SNS_TOPIC_ARN          = aws_sns_topic.fraud_alerts.arn
     }
   }
 }

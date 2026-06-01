@@ -5,7 +5,12 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Prefix used to name all resources (queue, table, Lambda, IAM)."
+  description = "Prefix used to name all resources."
   type        = string
-  default     = "banking-fraud-alert"
+  default     = "banking-fraud-alert-system"
+}
+
+variable "api_image_uri" {
+  description = "Container image URI for the FastAPI fraud detection API."
+  type        = string
 }
