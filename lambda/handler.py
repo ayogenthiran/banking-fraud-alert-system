@@ -19,6 +19,7 @@ from pathlib import Path
 
 # Read configuration from the environment so the same code works locally and
 # in AWS. Defaults keep the local demo working with no setup.
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "")
 LOCAL_FALLBACK_ENABLED = os.environ.get("LOCAL_FALLBACK_ENABLED", "true").lower() == "true"
@@ -82,9 +83,8 @@ def process_flagged_transaction(transaction: dict) -> dict:
 def _store_transaction(transaction: dict) -> None:
     """Persist a transaction to DynamoDB, falling back to a local file.
 
-    When ``DYNAMODB_TABLE_NAME`` is configured we write to DynamoDB. If that is
-    not configured (or the write fails) and the local fallback is enabled, we
-    append the transaction as one JSON line to the local fallback file.
+    Local runs can fall back to a JSONL file. In AWS, DynamoDB errors are
+    raised so Lambda fails the SQS message and it can be retried.
     """
     if DYNAMODB_TABLE_NAME:
         try:
@@ -93,11 +93,28 @@ def _store_transaction(transaction: dict) -> None:
             dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
             table = dynamodb.Table(DYNAMODB_TABLE_NAME)
             table.put_item(Item=transaction)
+            print(
+                "DynamoDB write succeeded: "
+                f"table={DYNAMODB_TABLE_NAME} "
+                f"transaction_id={transaction.get(PARTITION_KEY, 'unknown')}"
+            )
             return
         except Exception as e:  # noqa: BLE001 - keep error handling simple for the demo
-            print(f"DynamoDB write failed, using local fallback: {e}")
+            print(f"DynamoDB write failed: {e}")
+            if ENVIRONMENT == "aws":
+                raise
+
+            print("Using local fallback because ENVIRONMENT is local.")
+
+    if ENVIRONMENT == "aws":
+        raise RuntimeError("DYNAMODB_TABLE_NAME must be configured when ENVIRONMENT=aws")
 
     if LOCAL_FALLBACK_ENABLED:
         LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
         with LOCAL_FALLBACK_FILE.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(transaction) + "\n")
+        print(
+            "Local fallback write succeeded: "
+            f"file={LOCAL_FALLBACK_FILE} "
+            f"transaction_id={transaction.get(PARTITION_KEY, 'unknown')}"
+        )
