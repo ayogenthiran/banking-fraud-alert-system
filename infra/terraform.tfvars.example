@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars and adjust as needed:
+#   cp terraform.tfvars.example terraform.tfvars
+
+aws_region   = "us-east-1"
+project_name = "banking-fraud-alert"
