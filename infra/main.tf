@@ -94,6 +94,13 @@ resource "aws_sns_topic" "fraud_alerts" {
   name = "${var.project_name}-fraud-alerts"
 }
 
+resource "aws_sns_topic_subscription" "fraud_alerts_email" {
+  count     = var.alert_email == "" ? 0 : 1
+  topic_arn = aws_sns_topic.fraud_alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
 # ---------------------------------------------------------------------------
 # ECS and ALB networking
 # ---------------------------------------------------------------------------
@@ -355,6 +362,18 @@ data "aws_iam_policy_document" "lambda_permissions" {
     resources = [aws_dynamodb_table.flagged_transactions.arn]
   }
 
+  # Allow DynamoDB writes against the customer-managed table encryption key.
+  statement {
+    sid    = "UseDynamoDBKmsKey"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+    ]
+    resources = [aws_kms_key.dynamodb.arn]
+  }
+
   # Publish fraud alert notifications.
   statement {
     sid       = "PublishFraudAlerts"
@@ -423,7 +442,6 @@ resource "aws_lambda_function" "processor" {
 
   environment {
     variables = {
-      AWS_REGION             = var.aws_region
       ENVIRONMENT            = "aws"
       DYNAMODB_TABLE_NAME    = aws_dynamodb_table.flagged_transactions.name
       LOCAL_FALLBACK_ENABLED = "false"

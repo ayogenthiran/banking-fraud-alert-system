@@ -14,6 +14,7 @@ Local runs keep working without AWS because alerts fall back to log output.
 
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 
 # Read configuration from the environment so the same code works locally and
@@ -112,7 +113,7 @@ def _store_transaction(transaction: dict) -> None:
 
             dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
             table = dynamodb.Table(DYNAMODB_TABLE_NAME)
-            table.put_item(Item=transaction)
+            table.put_item(Item=_to_dynamodb_compatible(transaction))
             print(
                 "DynamoDB write succeeded: "
                 f"table={DYNAMODB_TABLE_NAME} "
@@ -138,3 +139,17 @@ def _store_transaction(transaction: dict) -> None:
             f"file={LOCAL_FALLBACK_FILE} "
             f"transaction_id={transaction.get(PARTITION_KEY, 'unknown')}"
         )
+
+
+def _to_dynamodb_compatible(value):
+    """Convert parsed JSON values into types accepted by DynamoDB."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+
+    if isinstance(value, dict):
+        return {key: _to_dynamodb_compatible(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_to_dynamodb_compatible(item) for item in value]
+
+    return value

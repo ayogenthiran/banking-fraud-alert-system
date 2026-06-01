@@ -14,3 +14,9 @@ variable "api_image_uri" {
   description = "Container image URI for the FastAPI fraud detection API."
   type        = string
 }
+
+variable "alert_email" {
+  description = "Optional email address to subscribe to fraud alert SNS notifications."
+  type        = string
+  default     = ""
+}

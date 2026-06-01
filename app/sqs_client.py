@@ -8,8 +8,6 @@ demo still produces durable output without any AWS resources.
 import json
 from pathlib import Path
 
-import boto3
-
 from app.config import get_settings
 
 # Directory and file used when falling back to local storage.
@@ -36,6 +34,8 @@ def publish_flagged_transaction(event: dict) -> dict:
 
     try:
         if settings.sqs_queue_url:
+            import boto3
+
             client = boto3.client("sqs", region_name=settings.aws_region)
             client.send_message(
                 QueueUrl=settings.sqs_queue_url,
@@ -49,6 +49,12 @@ def publish_flagged_transaction(event: dict) -> dict:
                 handle.write(json.dumps(event) + "\n")
             return {"published": True, "destination": "local"}
 
+        if settings.environment.lower() == "aws":
+            raise RuntimeError("SQS_QUEUE_URL must be configured when ENVIRONMENT=aws")
+
         return {"published": False, "destination": "none"}
     except Exception as e:  # noqa: BLE001 - keep error handling simple for the demo
+        if settings.environment.lower() == "aws":
+            raise
+
         return {"published": False, "destination": "error", "error": str(e)}

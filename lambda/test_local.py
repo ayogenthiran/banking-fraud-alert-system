@@ -14,6 +14,7 @@ import os
 
 # Force the local file fallback so the test runs without DynamoDB.
 os.environ["DYNAMODB_TABLE_NAME"] = ""
+os.environ["SNS_TOPIC_ARN"] = ""
 os.environ["LOCAL_FALLBACK_ENABLED"] = "true"
 
 from handler import lambda_handler
@@ -58,6 +59,7 @@ def main() -> None:
 
     assert result["batch_size"] == 2
     assert all(item["processed"] for item in result["results"])
+    assert all(item["alert_status"] == {"sent": True, "destination": "log"} for item in result["results"])
     assert result["results"][0]["transaction_id"] == "txn-001"
     print("\nAll assertions passed.")
 

@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-class TransactionType(StrEnum):
+class TransactionType(str, Enum):
     WITHDRAWAL = "withdrawal"
     DEPOSIT = "deposit"
     TRANSFER = "transfer"
 
 
-class FraudStatus(StrEnum):
+class FraudStatus(str, Enum):
     APPROVED = "approved"
     FLAGGED = "flagged"
 
@@ -37,4 +40,4 @@ class TransactionResponse(BaseModel):
     reasons: list[str]
     risk_score: int
     message: str
-    notification_status: dict | None = None
+    notification_status: Optional[dict] = None
