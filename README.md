@@ -1,65 +1,115 @@
 # Banking Fraud Detection and Customer Notification System
 
-A cloud-based fraud detection system for banking transactions, built with FastAPI, Docker, AWS ECS Fargate, Application Load Balancer, SQS, Lambda, DynamoDB, SNS, IAM, and Terraform.
+A cloud-native banking fraud detection and customer notification system built with **FastAPI, Docker, AWS ECS Fargate, Application Load Balancer, SQS, Lambda, DynamoDB, SNS, IAM, and Terraform**.
+
+The system accepts banking transaction requests, evaluates them using rule-based fraud detection, approves valid transactions, and sends suspicious transactions to an asynchronous alert-processing pipeline.
 
 ## Overview
 
-The system exposes a FastAPI transaction API that accepts banking transaction requests, evaluates them with deterministic fraud rules, and returns either an `approved` or `flagged` decision.
+The project has two main components:
 
-Approved transactions return immediately. Flagged transactions are published to SQS, processed asynchronously by Lambda, stored in DynamoDB as fraud logs, and sent as customer alerts through SNS or log output.
+1. **Transaction Processing and Fraud Detection API**
+
+   * Built with Python and FastAPI.
+   * Deployed as a containerized service on AWS ECS Fargate.
+   * Exposed publicly through an Application Load Balancer.
+   * Accepts transaction details and applies fraud detection rules.
+   * Returns `approved` for valid transactions.
+   * Returns `flagged` for suspicious transactions and publishes the flagged event to SQS.
+
+2. **Customer Notification and Alerting Processor**
+
+   * Implemented as an AWS Lambda function.
+   * Triggered by messages from SQS.
+   * Stores flagged transactions in DynamoDB.
+   * Sends customer alerts through SNS when configured, or logs the alert message.
 
 ## Architecture
-
-The AWS deployment includes:
-
-* ECS Fargate for the FastAPI transaction API
-* Application Load Balancer for public API access
-* SQS for flagged transaction events
-* Lambda for processing flagged transactions
-* DynamoDB for fraud logs
-* SNS or log-based customer alerts
-* IAM roles and policies for ECS, Lambda, SQS, DynamoDB, SNS, and CloudWatch Logs access
-* Terraform infrastructure in `infra/`
 
 ```mermaid
 flowchart LR
     Client[Client] --> ALB[Application Load Balancer]
     ALB --> ECS[ECS Fargate FastAPI API]
     ECS --> Rules[Fraud Detection Rules]
-    Rules -->|Approved| Response[Approved Response]
+    Rules -->|Approved| Approved[Approved Response]
     Rules -->|Flagged| SQS[SQS Queue]
     SQS --> Lambda[AWS Lambda Processor]
     Lambda --> DynamoDB[DynamoDB Fraud Logs]
-    Lambda --> Alerts[SNS or Log-Based Customer Alerts]
+    Lambda --> Alert[SNS / Alert Log]
 ```
 
-For local development, SQS and DynamoDB can be replaced by JSONL fallback files so the transaction and Lambda flows can be tested without AWS credentials.
+The AWS deployment includes:
+
+* ECS Fargate for the FastAPI transaction API
+* Application Load Balancer for public API access
+* SQS for decoupling the API from the alerting processor
+* Lambda for processing flagged transactions
+* DynamoDB for storing fraud logs
+* SNS or log-based customer alerting
+* IAM roles and policies for secure service access
+* Terraform for infrastructure provisioning
 
 ## Fraud Detection Logic
 
-The API evaluates each transaction using three deterministic rules:
+The API evaluates each transaction using three deterministic fraud rules.
 
-* Large withdrawal: `transaction_type` is `withdrawal` and `amount >= 5000`.
-* Failed login attempts: `failed_login_attempts >= 3`.
-* Different location in a short window: the same account has a previous transaction from a different location within `10` minutes.
+| Rule                                    | Condition                                                                             | Result           |
+| --------------------------------------- | ------------------------------------------------------------------------------------- | ---------------- |
+| Large withdrawal                        | `transaction_type` is `withdrawal` and `amount >= 5000`                               | Flag transaction |
+| Failed login attempts                   | `failed_login_attempts >= 3`                                                          | Flag transaction |
+| Different location in short time window | Same account has a previous transaction from a different location within `10` minutes | Flag transaction |
 
-Risk score weights are:
+Risk score weights:
 
-* Large withdrawal: `+50`.
-* Failed login attempts: `+30`.
-* Different location within the short time window: `+40`.
+| Rule                                        | Risk Score |
+| ------------------------------------------- | ---------- |
+| Large withdrawal                            | `+50`      |
+| Failed login attempts                       | `+30`      |
+| Different location within short time window | `+40`      |
 
-If the final risk score is greater than `0`, the transaction is marked as `flagged`. Otherwise, it is marked as `approved`.
+If the final risk score is greater than `0`, the transaction is marked as `flagged`.
+
+If no fraud rules are triggered, the transaction is marked as `approved`.
 
 ## API Usage
 
-Health check:
+### Health Check
 
 ```bash
 curl http://localhost:8000/health
 ```
 
-Process an approved transaction:
+Example response:
+
+```json
+{
+  "status": "healthy",
+  "service": "Banking Fraud Detection API"
+}
+```
+
+### Process Transaction
+
+Endpoint:
+
+```http
+POST /transactions
+```
+
+Request body:
+
+```json
+{
+  "account_id": "ACC123",
+  "amount": 120,
+  "transaction_type": "deposit",
+  "location": "Toronto",
+  "timestamp": "2026-06-01T10:00:00",
+  "failed_login_attempts": 0
+}
+```
+
+### Approved Transaction Example
 
 ```bash
 curl -X POST http://localhost:8000/transactions \
@@ -74,27 +124,41 @@ curl -X POST http://localhost:8000/transactions \
   }'
 ```
 
-Process a flagged transaction:
+Example response:
+
+```json
+{
+  "transaction_id": "a317c756-1772-4c61-aa59-f6e175083cb0",
+  "account_id": "ACC123",
+  "status": "approved",
+  "reasons": [],
+  "risk_score": 0,
+  "message": "Transaction approved",
+  "notification_status": null
+}
+```
+
+### Flagged Transaction Example
 
 ```bash
 curl -X POST http://localhost:8000/transactions \
   -H "Content-Type: application/json" \
   -d '{
-    "account_id": "ACC123",
-    "amount": 7000,
+    "account_id": "ACC999",
+    "amount": 9000,
     "transaction_type": "withdrawal",
-    "location": "Toronto",
-    "timestamp": "2026-06-01T10:05:00",
-    "failed_login_attempts": 4
+    "location": "Vancouver",
+    "timestamp": "2026-06-01T11:00:00",
+    "failed_login_attempts": 5
   }'
 ```
 
-Example flagged response:
+Example response:
 
 ```json
 {
-  "transaction_id": "9a558cd3-54a2-497e-bd38-697dd4875f1f",
-  "account_id": "ACC123",
+  "transaction_id": "575668f0-bf9b-4b2f-a332-410ddddba638",
+  "account_id": "ACC999",
   "status": "flagged",
   "reasons": [
     "Unusually large withdrawal amount",
@@ -131,32 +195,48 @@ Run the FastAPI service:
 uvicorn app.main:app --reload
 ```
 
-Local API endpoints:
+Local endpoints:
 
 * API root: `http://localhost:8000`
 * Swagger UI: `http://localhost:8000/docs`
 * Health check: `http://localhost:8000/health`
 
-When `SQS_QUEUE_URL` is not configured and `LOCAL_FALLBACK_ENABLED=true`, flagged transactions are written to `local_data/flagged_transactions.jsonl`.
+When `SQS_QUEUE_URL` is not configured and `LOCAL_FALLBACK_ENABLED=true`, flagged transactions are written locally to:
+
+```text
+local_data/flagged_transactions.jsonl
+```
 
 ## Docker Run
 
-Build and run the FastAPI service with Docker Compose:
+Build and run the API locally with Docker Compose:
 
 ```bash
 docker compose up --build
 ```
 
-The API is available at `http://localhost:8000`, and Swagger UI is available at `http://localhost:8000/docs`.
+The API will be available at:
+
+```text
+http://localhost:8000
+```
+
+Swagger UI:
+
+```text
+http://localhost:8000/docs
+```
 
 ## Lambda Processing
 
-The Lambda handler processes SQS events for flagged transactions. For each record, it:
+The Lambda function processes SQS events for flagged transactions.
+
+For each flagged transaction, it:
 
 1. Parses the SQS message body.
-2. Stores the flagged transaction in DynamoDB.
-3. Publishes a customer alert to SNS when `SNS_TOPIC_ARN` is configured.
-4. Logs the customer alert when SNS is not configured.
+2. Stores the transaction in DynamoDB.
+3. Publishes a customer alert to SNS when configured.
+4. Logs the alert message when SNS is not configured.
 
 Run the local Lambda test:
 
@@ -164,13 +244,29 @@ Run the local Lambda test:
 python lambda/local_test.py
 ```
 
-For local testing, processed alerts are written to `local_data/lambda_processed_alerts.jsonl`.
+For local testing, processed alerts are written to:
+
+```text
+local_data/lambda_processed_alerts.jsonl
+```
 
 ## Terraform Deployment
 
-Terraform files are located in `infra/`. The configuration provisions the FastAPI API serving layer, asynchronous fraud alerting pipeline, fraud log storage, customer alerting resources, and IAM permissions.
+Terraform files are located in the `infra/` directory.
 
-Initialize Terraform:
+The Terraform configuration provisions:
+
+* ECR repository for the API Docker image
+* ECS Fargate service for the FastAPI API
+* Application Load Balancer and target group
+* SQS queue for flagged transaction events
+* Lambda function for processing flagged transactions
+* DynamoDB table for storing fraud logs
+* SNS topic for customer alerts
+* IAM roles and policies
+* CloudWatch log groups
+
+### 1. Initialize Terraform
 
 ```bash
 cd infra
@@ -179,43 +275,59 @@ terraform fmt
 terraform validate
 ```
 
-Create the ECR repository, build and push the API image, then deploy the full stack:
+### 2. Create the ECR repository
 
 ```bash
-terraform apply -target=aws_ecr_repository.api -var="api_image_uri=placeholder"
+terraform apply \
+  -target=aws_ecr_repository.api \
+  -var="api_image_uri=placeholder"
+```
 
+### 3. Build and push the Docker image
+
+```bash
 ECR_REPOSITORY_URL=$(terraform output -raw ecr_repository_url)
 ECR_REGISTRY=${ECR_REPOSITORY_URL%/*}
 AWS_REGION=${AWS_REGION:-us-east-1}
+IMAGE_TAG=$(date +%Y%m%d%H%M%S)
 
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
 docker build -t banking-fraud-alert-system ..
-docker tag banking-fraud-alert-system:latest "$ECR_REPOSITORY_URL:latest"
-docker push "$ECR_REPOSITORY_URL:latest"
-
-terraform plan -var="api_image_uri=$ECR_REPOSITORY_URL:latest"
-terraform apply -var="api_image_uri=$ECR_REPOSITORY_URL:latest"
+docker tag banking-fraud-alert-system:latest "$ECR_REPOSITORY_URL:$IMAGE_TAG"
+docker push "$ECR_REPOSITORY_URL:$IMAGE_TAG"
 ```
 
-Useful Terraform outputs:
+### 4. Deploy the full AWS stack
 
-* `api_url`: public API URL through the Application Load Balancer.
-* `sqs_queue_url`: queue used for flagged transaction events.
-* `dynamodb_table_name`: table used for fraud logs.
-* `lambda_function_name`: Lambda processor name.
-* `sns_topic_arn`: SNS topic used for fraud alerts.
+```bash
+terraform plan \
+  -var="api_image_uri=$ECR_REPOSITORY_URL:$IMAGE_TAG"
+
+terraform apply \
+  -var="api_image_uri=$ECR_REPOSITORY_URL:$IMAGE_TAG"
+```
+
+To configure an SNS email subscription during deployment:
+
+```bash
+terraform apply \
+  -var="api_image_uri=$ECR_REPOSITORY_URL:$IMAGE_TAG" \
+  -var="alert_email=you@example.com"
+```
+
+After deployment, confirm the SNS subscription email from AWS if email alerting is enabled.
 
 ## AWS Deployment Test Commands
 
-Set deployment output variables:
+Set output variables:
 
 ```bash
-cd infra
 API_URL=$(terraform output -raw api_url)
 DYNAMODB_TABLE_NAME=$(terraform output -raw dynamodb_table_name)
 LAMBDA_FUNCTION_NAME=$(terraform output -raw lambda_function_name)
+AWS_REGION=${AWS_REGION:-us-east-1}
 ```
 
 Test the public health endpoint:
@@ -224,37 +336,76 @@ Test the public health endpoint:
 curl "$API_URL/health"
 ```
 
-Send a flagged transaction through the deployed API:
+Send an approved transaction through the deployed API:
 
 ```bash
 curl -X POST "$API_URL/transactions" \
   -H "Content-Type: application/json" \
   -d '{
     "account_id": "ACC123",
-    "amount": 7000,
-    "transaction_type": "withdrawal",
+    "amount": 120,
+    "transaction_type": "deposit",
     "location": "Toronto",
-    "timestamp": "2026-06-01T10:05:00",
-    "failed_login_attempts": 4
+    "timestamp": "2026-06-01T10:00:00",
+    "failed_login_attempts": 0
   }'
 ```
 
-Confirm Lambda processed SQS messages:
+Send a flagged transaction through the deployed API:
 
 ```bash
-aws logs tail "/aws/lambda/$LAMBDA_FUNCTION_NAME" --since 10m
+curl -X POST "$API_URL/transactions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_id": "ACC999",
+    "amount": 9000,
+    "transaction_type": "withdrawal",
+    "location": "Vancouver",
+    "timestamp": "2026-06-01T11:00:00",
+    "failed_login_attempts": 5
+  }'
+```
+
+Confirm Lambda processed the SQS message:
+
+```bash
+aws logs tail "/aws/lambda/$LAMBDA_FUNCTION_NAME" \
+  --since 10m \
+  --region "$AWS_REGION"
 ```
 
 Confirm fraud logs were written to DynamoDB:
 
 ```bash
-aws dynamodb scan --table-name "$DYNAMODB_TABLE_NAME"
+aws dynamodb scan \
+  --table-name "$DYNAMODB_TABLE_NAME" \
+  --region "$AWS_REGION"
 ```
+
+## Deployed API Validation
+
+The API was deployed on AWS ECS Fargate behind an Application Load Balancer.
+
+API URL:
+
+```text
+http://banking-fraud-alert-system-alb-1896298204.us-east-1.elb.amazonaws.com
+```
+
+Validated cloud flow:
+
+* `GET /health` returned a healthy response through the ALB
+* Approved transaction returned `status: "approved"`
+* Flagged transaction returned `status: "flagged"`
+* Flagged transaction was published to SQS
+* Lambda processed the SQS message
+* DynamoDB stored the flagged transaction record
+* SNS topic was configured for customer alerts
 
 ## Assumptions
 
 * Fraud detection is intentionally rule-based and deterministic for clarity and explainability.
 * The different-location rule uses in-memory account state inside the running API process.
 * Local JSONL fallback files are used only for local development and testing.
-* Customer alerts are sent to SNS when configured; otherwise, the Lambda logs the alert message.
-* Terraform deploys the assignment infrastructure in the configured AWS account and region.
+* Customer alerts are sent through SNS when configured; otherwise, the Lambda logs the alert message.
+* Terraform deploys the required AWS infrastructure in the configured AWS account and region.
