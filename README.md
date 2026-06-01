@@ -266,6 +266,15 @@ The Terraform configuration provisions:
 * IAM roles and policies
 * CloudWatch log groups
 
+## Bonus: CloudWatch Fraud Monitoring
+
+This project includes CloudWatch alarms for fraud pipeline monitoring:
+
+* SQS backlog alarm: detects when flagged transaction messages accumulate in the queue.
+* Lambda error alarm: detects failures in the alert-processing Lambda.
+
+Both alarms publish notifications to the configured SNS topic.
+
 ### 1. Initialize Terraform
 
 ```bash

@@ -459,3 +459,38 @@ resource "aws_lambda_event_source_mapping" "sqs_to_lambda" {
   batch_size       = 10
   enabled          = true
 }
+
+# ---------------------------------------------------------------------------
+# CloudWatch alarms for fraud detection volume spikes
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_metric_alarm" "sqs_fraud_backlog" {
+  alarm_name          = "${var.project_name}-sqs-fraud-backlog"
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 5
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  alarm_actions       = [aws_sns_topic.fraud_alerts.arn]
+
+  dimensions = {
+    QueueName = aws_sqs_queue.flagged_transactions.name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "${var.project_name}-lambda-errors"
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  alarm_actions       = [aws_sns_topic.fraud_alerts.arn]
+
+  dimensions = {
+    FunctionName = aws_lambda_function.processor.function_name
+  }
+}

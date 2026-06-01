@@ -42,3 +42,13 @@ output "sns_topic_arn" {
   description = "ARN of the SNS topic for fraud alerts."
   value       = aws_sns_topic.fraud_alerts.arn
 }
+
+output "sqs_backlog_alarm_name" {
+  description = "Name of the CloudWatch alarm for SQS fraud backlog spikes."
+  value       = aws_cloudwatch_metric_alarm.sqs_fraud_backlog.alarm_name
+}
+
+output "lambda_error_alarm_name" {
+  description = "Name of the CloudWatch alarm for Lambda processor errors."
+  value       = aws_cloudwatch_metric_alarm.lambda_errors.alarm_name
+}
