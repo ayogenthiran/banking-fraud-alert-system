@@ -19,6 +19,7 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
@@ -26,13 +27,15 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Local data (keep directory, ignore contents)
-local_data/*
+# Local data (keep directory, ignore generated data)
+local_data/*.jsonl
+local_data/*.json
 !local_data/.gitkeep
 
 # Terraform (commit .terraform.lock.hcl, ignore everything else)
 .terraform/
 *.tfstate
+*.tfstate.backup
 *.tfstate.*
 terraform.tfvars
 infra/build/
