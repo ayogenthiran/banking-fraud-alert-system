@@ -562,6 +562,11 @@ data "archive_file" "lambda" {
   output_path = "${path.module}/build/lambda.zip"
 }
 
+resource "aws_cloudwatch_log_group" "lambda" {
+  name              = "/aws/lambda/${var.project_name}-processor"
+  retention_in_days = 14
+}
+
 # ---------------------------------------------------------------------------
 # Lambda function
 # ---------------------------------------------------------------------------
@@ -574,6 +579,8 @@ resource "aws_lambda_function" "processor" {
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
 
+  depends_on = [aws_cloudwatch_log_group.lambda]
+
   # Enable X-Ray tracing for end-to-end visibility into invocations.
   tracing_config {
     mode = "Active"
@@ -581,7 +588,7 @@ resource "aws_lambda_function" "processor" {
 
   environment {
     variables = {
-      AWS_REGION             = var.aws_region
+      # AWS_REGION is set automatically by Lambda and cannot be overridden.
       ENVIRONMENT            = "aws"
       DYNAMODB_TABLE_NAME    = aws_dynamodb_table.flagged_transactions.name
       FIREHOSE_STREAM_NAME   = aws_kinesis_firehose_delivery_stream.fraud_analytics.name

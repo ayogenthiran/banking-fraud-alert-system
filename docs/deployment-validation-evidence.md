@@ -301,3 +301,89 @@ Lambda log excerpt for the same transaction:
 DynamoDB write succeeded: table=banking-fraud-alert-system-flagged-transactions transaction_id=eec0dd31-cdf6-491b-8a50-959bac759aa4
 Firehose write succeeded: stream=banking-fraud-alert-system-fraud-analytics-stream transaction_id=eec0dd31-cdf6-491b-8a50-959bac759aa4
 ```
+
+## Local Test Suite Evidence
+
+Command:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+```
+
+Expected result:
+
+```text
+============================== 37 passed in ... ==============================
+```
+
+## Terraform Validation Evidence
+
+Commands:
+
+```bash
+cd infra
+terraform fmt -check -recursive
+terraform validate
+terraform plan -var="api_image_uri=placeholder"
+```
+
+Expected result:
+
+```text
+Success! The configuration is valid.
+Plan: ... to add, ... to change, ... to destroy.
+```
+
+Capture a screenshot or paste the `terraform plan` summary showing ECS, ALB, SQS, Lambda, DynamoDB, SNS, and IAM resources.
+
+## Evidence To Collect Before Submission
+
+Collect the following artifacts and attach them to your submission (screenshots, terminal output, or exported JSON):
+
+| # | What to capture | Command or location |
+| - | --------------- | ------------------- |
+| 1 | Architecture diagram | `docs/architecture.mmd` or generated PNG |
+| 2 | Terraform init/validate/plan success | `terraform validate` and `terraform plan` output |
+| 3 | ECS/ALB health check | `curl "$API_URL/health"` |
+| 4 | Approved transaction response | `POST /transactions` with small deposit |
+| 5 | Flagged transaction + SQS publish | `POST /transactions` with large withdrawal; `"destination":"sqs"` |
+| 6 | Lambda CloudWatch logs | `aws logs tail "/aws/lambda/$LAMBDA_FUNCTION_NAME" --since 10m` |
+| 7 | DynamoDB flagged record | `aws dynamodb scan --table-name "$DYNAMODB_TABLE_NAME"` |
+| 8 | SNS subscription status | `aws sns list-subscriptions-by-topic --topic-arn "$SNS_TOPIC_ARN"` |
+| 9 | SNS email alert (optional) | Screenshot of received alert email after subscription confirmation |
+| 10 | Pytest suite pass | `pytest -v` output |
+| 11 | Bonus: Firehose/S3 delivery | `aws s3 ls s3://$BUCKET/flagged-transactions/ --recursive` |
+| 12 | Bonus: CloudWatch alarms | `aws cloudwatch describe-alarms --alarm-names ...` |
+
+## Pre-Submission Command Checklist
+
+Run these from the project root before submitting:
+
+```bash
+# 1. Unit and integration tests
+source .venv/bin/activate
+pytest -v
+
+# 2. Local Lambda smoke test
+python lambda/test_local.py
+
+# 3. Terraform checks
+cd infra
+terraform fmt -check -recursive
+terraform validate
+terraform plan -var="api_image_uri=placeholder"
+
+# 4. Live AWS validation (after deploy)
+export API_URL=$(terraform output -raw api_url)
+export DYNAMODB_TABLE_NAME=$(terraform output -raw dynamodb_table_name)
+export LAMBDA_FUNCTION_NAME=$(terraform output -raw lambda_function_name)
+export SNS_TOPIC_ARN=$(terraform output -raw sns_topic_arn)
+export AWS_REGION=${AWS_REGION:-us-east-1}
+
+curl "$API_URL/health"
+# approved + flagged curl commands from README
+aws logs tail "/aws/lambda/$LAMBDA_FUNCTION_NAME" --since 10m --region "$AWS_REGION"
+aws dynamodb scan --table-name "$DYNAMODB_TABLE_NAME" --region "$AWS_REGION"
+```

@@ -33,6 +33,15 @@ def make_payload(**overrides):
     return payload
 
 
+def test_health_endpoint_returns_ok():
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert "service" in body
+
+
 def test_approved_transaction_returns_expected_decision():
     response = client.post("/transactions", json=make_payload())
 

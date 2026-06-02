@@ -42,3 +42,11 @@ DynamoDB table name, Lambda function name, and SNS topic ARN.
 
 Set `alert_email` during apply to subscribe an email address to the SNS topic.
 AWS sends a confirmation email before notifications are delivered.
+
+## Destroy
+
+```bash
+BUCKET=$(terraform output -raw fraud_analytics_bucket_name)
+aws s3 rm "s3://$BUCKET" --recursive
+terraform destroy -var="api_image_uri=placeholder"
+```

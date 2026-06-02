@@ -163,3 +163,99 @@ def test_process_flagged_transaction_includes_firehose_status(monkeypatch):
         "published": False,
         "destination": "not_configured",
     }
+
+
+def test_lambda_handler_skips_invalid_json_record():
+    event = {"Records": [{"body": "not-json"}]}
+
+    result = handler.lambda_handler(event, context=None)
+
+    assert result["batch_size"] == 1
+    assert result["results"][0]["processed"] is False
+    assert "error" in result["results"][0]
+
+
+def test_lambda_handler_skips_missing_body():
+    event = {"Records": [{}]}
+
+    result = handler.lambda_handler(event, context=None)
+
+    assert result["results"][0]["processed"] is False
+    assert "Missing SQS message body" in result["results"][0]["error"]
+
+
+def test_publish_customer_alert_uses_sns_when_configured(monkeypatch):
+    published = []
+
+    class FakeSNSClient:
+        def publish(self, **kwargs):
+            published.append(kwargs)
+
+    def fake_client(service_name, region_name=None):
+        assert service_name == "sns"
+        return FakeSNSClient()
+
+    monkeypatch.setattr(handler, "SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123:alerts")
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=fake_client))
+
+    status = handler.publish_customer_alert(
+        {
+            "transaction_id": "txn-sns",
+            "bank_id": "default",
+            "account_id": "acc-1",
+            "amount": 5000,
+            "location": "Toronto",
+            "risk_score": 50,
+        }
+    )
+
+    assert status == {"sent": True, "destination": "sns"}
+    assert published[0]["TopicArn"].endswith(":alerts")
+    assert "txn-sns" in published[0]["Message"]
+
+
+def test_store_transaction_writes_local_fallback_file(tmp_path, monkeypatch):
+    fallback_file = tmp_path / "lambda_processed_alerts.jsonl"
+    monkeypatch.setattr(handler, "DYNAMODB_TABLE_NAME", "")
+    monkeypatch.setattr(handler, "ENVIRONMENT", "local")
+    monkeypatch.setattr(handler, "LOCAL_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(handler, "LOCAL_FALLBACK_FILE", fallback_file)
+
+    transaction = {"transaction_id": "txn-local", "account_id": "acc-1"}
+    handler._store_transaction(transaction)
+
+    lines = fallback_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["transaction_id"] == "txn-local"
+
+
+def test_store_transaction_writes_to_dynamodb(monkeypatch):
+    stored_items = []
+
+    class FakeTable:
+        def put_item(self, Item):
+            stored_items.append(Item)
+
+    class FakeDynamoResource:
+        def Table(self, name):
+            assert name == "fraud-table"
+            return FakeTable()
+
+    def fake_resource(service_name, region_name=None):
+        assert service_name == "dynamodb"
+        return FakeDynamoResource()
+
+    monkeypatch.setattr(handler, "DYNAMODB_TABLE_NAME", "fraud-table")
+    monkeypatch.setattr(handler, "ENVIRONMENT", "local")
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(resource=fake_resource))
+
+    transaction = {
+        "transaction_id": "txn-ddb",
+        "amount": 100.5,
+        "risk_score": 50,
+    }
+    handler._store_transaction(transaction)
+
+    assert len(stored_items) == 1
+    assert stored_items[0]["transaction_id"] == "txn-ddb"
+    assert stored_items[0]["amount"] == Decimal("100.5")

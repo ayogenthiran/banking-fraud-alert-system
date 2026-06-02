@@ -68,10 +68,29 @@ def lambda_handler(event, context):
     results = []
 
     for record in event.get("Records", []):
-        transaction = json.loads(record["body"])
-        results.append(process_flagged_transaction(transaction))
+        results.append(_process_sqs_record(record))
 
     return {"batch_size": len(results), "results": results}
+
+
+def _process_sqs_record(record: dict) -> dict:
+    """Parse one SQS record and process it, returning a safe result on bad input."""
+    try:
+        body = record.get("body")
+        if body is None:
+            raise ValueError("Missing SQS message body")
+
+        transaction = json.loads(body)
+        if not isinstance(transaction, dict):
+            raise ValueError("Transaction payload must be a JSON object")
+
+        return process_flagged_transaction(transaction)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        print(f"Skipping invalid SQS record: {exc}")
+        return {
+            "processed": False,
+            "error": str(exc),
+        }
 
 
 def process_flagged_transaction(transaction: dict) -> dict:
