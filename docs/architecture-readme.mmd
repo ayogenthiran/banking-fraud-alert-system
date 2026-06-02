@@ -1,0 +1,11 @@
+%% Source for docs/architecture.svg (README diagram). Regenerate:
+%% npx @mermaid-js/mermaid-cli -i docs/architecture-readme.mmd -o docs/architecture.svg -b transparent
+flowchart LR
+    Client[Client] --> ALB[Application Load Balancer]
+    ALB --> ECS[ECS Fargate FastAPI API]
+    ECS --> Rules[Fraud Detection Rules]
+    Rules -->|Approved| Response[API Response]
+    Rules -->|Flagged| SQS[SQS Queue]
+    SQS --> Lambda[AWS Lambda Processor]
+    Lambda --> DynamoDB[DynamoDB Fraud Logs]
+    Lambda --> SNS[SNS / Log Alert]

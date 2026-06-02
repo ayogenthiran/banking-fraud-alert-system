@@ -8,17 +8,7 @@ The system accepts banking transaction requests, evaluates them using fraud dete
 
 The API runs on ECS Fargate behind an Application Load Balancer. It evaluates each transaction using fraud detection rules. Approved transactions return directly to the client, while flagged transactions are sent to SQS. Lambda processes the flagged events, stores fraud records in DynamoDB, and sends or logs customer alerts using SNS.
 
-```mermaid
-flowchart LR
-    Client[Client] --> ALB[Application Load Balancer]
-    ALB --> ECS[ECS Fargate FastAPI API]
-    ECS --> Rules[Fraud Detection Rules]
-    Rules -->|Approved| Response[API Response]
-    Rules -->|Flagged| SQS[SQS Queue]
-    SQS --> Lambda[AWS Lambda Processor]
-    Lambda --> DynamoDB[DynamoDB Fraud Logs]
-    Lambda --> SNS[SNS / Log Alert]
-```
+![System architecture](docs/architecture.svg)
 
 The deployed AWS architecture includes:
 
