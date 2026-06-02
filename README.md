@@ -26,20 +26,9 @@ The project has two core components:
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    Client[Client] --> ALB[Application Load Balancer]
-    ALB --> ECS[ECS Fargate FastAPI API]
-    ECS --> Rules[Fraud Detection Rules]
-    Rules -->|Approved| Approved[Approved Response]
-    Rules -->|Flagged| SQS[SQS Queue]
-    SQS --> Lambda[AWS Lambda Processor]
-    Lambda --> DynamoDB[DynamoDB Fraud Logs]
-    Lambda --> Alert[SNS / Alert Log]
-    Lambda --> Firehose[Kinesis Firehose]
-    Firehose --> S3[S3 Analytics Bucket]
-    CW[CloudWatch Alarms] --> Alert
-```
+![System architecture diagram](docs/architecture.png)
+
+_Source: [`docs/architecture.mmd`](docs/architecture.mmd) — regenerate with `npx -y @mermaid-js/mermaid-cli mmdc -i docs/architecture.mmd -o docs/architecture.png -b white -w 1400`._
 
 The AWS deployment includes:
 
