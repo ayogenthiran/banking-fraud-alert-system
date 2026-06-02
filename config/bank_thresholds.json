@@ -1,0 +1,17 @@
+{
+  "default": {
+    "large_withdrawal_threshold": 5000,
+    "failed_login_threshold": 3,
+    "location_window_minutes": 10
+  },
+  "bank_a": {
+    "large_withdrawal_threshold": 5000,
+    "failed_login_threshold": 3,
+    "location_window_minutes": 10
+  },
+  "bank_b": {
+    "large_withdrawal_threshold": 10000,
+    "failed_login_threshold": 5,
+    "location_window_minutes": 5
+  }
+}

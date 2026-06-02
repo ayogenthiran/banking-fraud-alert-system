@@ -43,6 +43,16 @@ output "sns_topic_arn" {
   value       = aws_sns_topic.fraud_alerts.arn
 }
 
+output "fraud_analytics_bucket_name" {
+  description = "Name of the S3 bucket receiving Firehose fraud analytics records."
+  value       = aws_s3_bucket.fraud_analytics.bucket
+}
+
+output "firehose_delivery_stream_name" {
+  description = "Name of the Kinesis Firehose delivery stream for flagged transactions."
+  value       = aws_kinesis_firehose_delivery_stream.fraud_analytics.name
+}
+
 output "sqs_backlog_alarm_name" {
   description = "Name of the CloudWatch alarm for SQS fraud backlog spikes."
   value       = aws_cloudwatch_metric_alarm.sqs_fraud_backlog.alarm_name

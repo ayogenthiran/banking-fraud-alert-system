@@ -7,7 +7,8 @@ transaction (as JSON) in its ``body``. For each record we:
 2. Store it in DynamoDB when a table is configured.
 3. Fall back to a local JSON Lines file when DynamoDB is not available and the
    local fallback is enabled (handy for running the demo without AWS).
-4. Send a customer alert through SNS when configured, otherwise log it.
+4. Send a copy to Kinesis Firehose when configured for analytics.
+5. Send a customer alert through SNS when configured, otherwise log it.
 
 Local runs keep working without AWS because alerts fall back to log output.
 """
@@ -23,6 +24,7 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+FIREHOSE_STREAM_NAME = os.environ.get("FIREHOSE_STREAM_NAME", "")
 LOCAL_FALLBACK_ENABLED = os.environ.get("LOCAL_FALLBACK_ENABLED", "true").lower() == "true"
 
 # Directory and file used when falling back to local storage.
@@ -31,6 +33,25 @@ LOCAL_FALLBACK_FILE = LOCAL_DATA_DIR / "lambda_processed_alerts.jsonl"
 
 # Partition key for the DynamoDB table.
 PARTITION_KEY = "transaction_id"
+DEFAULT_BANK_ID = "default"
+
+
+def _resolve_bank_id(transaction: dict) -> str:
+    """Return bank_id from a transaction, using DEFAULT_BANK_ID when absent or blank."""
+    value = transaction.get("bank_id")
+    if value is None:
+        return DEFAULT_BANK_ID
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or DEFAULT_BANK_ID
+    return DEFAULT_BANK_ID
+
+
+def _with_resolved_bank_id(transaction: dict) -> dict:
+    """Copy a transaction and ensure bank_id is set for storage and downstream alerts."""
+    enriched = dict(transaction)
+    enriched["bank_id"] = _resolve_bank_id(transaction)
+    return enriched
 
 
 def lambda_handler(event, context):
@@ -62,17 +83,45 @@ def process_flagged_transaction(transaction: dict) -> dict:
     Returns:
         A dict describing the outcome of processing the transaction.
     """
+    transaction = _with_resolved_bank_id(transaction)
     transaction_id = transaction.get("transaction_id", "unknown")
 
     _store_transaction(transaction)
-
+    firehose_status = publish_to_firehose(transaction)
     alert_status = publish_customer_alert(transaction)
 
     return {
         "processed": True,
         "transaction_id": transaction_id,
+        "firehose_status": firehose_status,
         "alert_status": alert_status,
     }
+
+
+def publish_to_firehose(transaction: dict) -> dict:
+    """Send a JSON copy of the processed transaction to Firehose when enabled."""
+    if not FIREHOSE_STREAM_NAME:
+        return {"published": False, "destination": "not_configured"}
+
+    try:
+        import boto3
+
+        firehose = boto3.client("firehose", region_name=AWS_REGION)
+        firehose.put_record(
+            DeliveryStreamName=FIREHOSE_STREAM_NAME,
+            Record={
+                "Data": (json.dumps(transaction, default=str) + "\n").encode("utf-8")
+            },
+        )
+        print(
+            "Firehose write succeeded: "
+            f"stream={FIREHOSE_STREAM_NAME} "
+            f"transaction_id={transaction.get(PARTITION_KEY, 'unknown')}"
+        )
+        return {"published": True, "destination": "firehose"}
+    except Exception as e:  # noqa: BLE001 - keep error handling simple for the demo
+        print(f"Firehose write failed: {e}")
+        return {"published": False, "destination": "firehose"}
 
 
 def publish_customer_alert(transaction: dict) -> dict:
@@ -80,6 +129,7 @@ def publish_customer_alert(transaction: dict) -> dict:
     message = (
         "Suspicious transaction alert | "
         f"transaction_id={transaction.get('transaction_id', 'unknown')} "
+        f"bank_id={transaction['bank_id']} "
         f"account_id={transaction.get('account_id')} "
         f"amount={transaction.get('amount')} "
         f"location={transaction.get('location')} "

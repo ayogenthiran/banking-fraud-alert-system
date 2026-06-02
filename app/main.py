@@ -1,7 +1,9 @@
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from pydantic import BaseModel
 
+from app.auth import create_access_token, verify_token
 from app.config import get_settings
 from app.fraud_rules import evaluate_transaction
 from app.models import FraudStatus, TransactionRequest, TransactionResponse
@@ -13,6 +15,10 @@ app = FastAPI(title="Banking Fraud Detection API")
 
 APPROVED_MESSAGE = "Transaction approved"
 FLAGGED_MESSAGE = "Transaction flagged for review"
+
+
+class TokenRequest(BaseModel):
+    account_id: str
 
 
 @app.get("/")
@@ -32,6 +38,14 @@ def health() -> dict[str, str]:
     }
 
 
+@app.post("/auth/token", tags=["auth"])
+def issue_token(request: TokenRequest) -> dict[str, str]:
+    return {
+        "access_token": create_access_token(request.account_id),
+        "token_type": "bearer",
+    }
+
+
 @app.post(
     "/transactions",
     response_model=TransactionResponse,
@@ -43,7 +57,10 @@ def health() -> dict[str, str]:
     ),
     tags=["transactions"],
 )
-def process_transaction(transaction: TransactionRequest) -> TransactionResponse:
+def process_transaction(
+    transaction: TransactionRequest,
+    _: str = Depends(verify_token),
+) -> TransactionResponse:
     transaction_id = str(uuid4())
     decision = evaluate_transaction(transaction)
 
@@ -55,12 +72,13 @@ def process_transaction(transaction: TransactionRequest) -> TransactionResponse:
         event = {
             "transaction_id": transaction_id,
             "account_id": transaction.account_id,
+            "bank_id": transaction.bank_id,
             "amount": transaction.amount,
             "transaction_type": transaction.transaction_type,
             "location": transaction.location,
             "timestamp": transaction.timestamp.isoformat(),
             "failed_login_attempts": transaction.failed_login_attempts,
-            "status": decision.status,
+            "status": decision.status.value,
             "reasons": decision.reasons,
             "risk_score": decision.risk_score,
         }
@@ -69,6 +87,7 @@ def process_transaction(transaction: TransactionRequest) -> TransactionResponse:
     return TransactionResponse(
         transaction_id=transaction_id,
         account_id=transaction.account_id,
+        bank_id=transaction.bank_id,
         status=decision.status,
         reasons=decision.reasons,
         risk_score=decision.risk_score,

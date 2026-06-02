@@ -76,3 +76,73 @@ def test_different_location_within_window_is_flagged():
         "Transaction from different geographic region within short time window"
         in decision.reasons
     )
+
+
+def test_default_bank_withdrawal_7000_is_flagged():
+    transaction = make_transaction(
+        bank_id="default",
+        transaction_type=TransactionType.WITHDRAWAL,
+        amount=7000,
+    )
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.FLAGGED
+    assert "Unusually large withdrawal amount" in decision.reasons
+
+
+def test_bank_b_withdrawal_7000_is_approved():
+    transaction = make_transaction(
+        bank_id="bank_b",
+        transaction_type=TransactionType.WITHDRAWAL,
+        amount=7000,
+    )
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.APPROVED
+    assert decision.reasons == []
+
+
+def test_bank_b_withdrawal_12000_is_flagged():
+    transaction = make_transaction(
+        bank_id="bank_b",
+        transaction_type=TransactionType.WITHDRAWAL,
+        amount=12000,
+    )
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.FLAGGED
+    assert "Unusually large withdrawal amount" in decision.reasons
+
+
+def test_bank_b_failed_login_attempts_4_is_approved():
+    transaction = make_transaction(bank_id="bank_b", failed_login_attempts=4)
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.APPROVED
+    assert decision.reasons == []
+
+
+def test_bank_b_failed_login_attempts_5_is_flagged():
+    transaction = make_transaction(bank_id="bank_b", failed_login_attempts=5)
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.FLAGGED
+    assert "Too many failed login attempts before transaction" in decision.reasons
+
+
+def test_unknown_bank_id_uses_default_thresholds():
+    transaction = make_transaction(
+        bank_id="unknown_bank",
+        transaction_type=TransactionType.WITHDRAWAL,
+        amount=7000,
+    )
+
+    decision = evaluate_transaction(transaction)
+
+    assert decision.status == FraudStatus.FLAGGED
+    assert "Unusually large withdrawal amount" in decision.reasons

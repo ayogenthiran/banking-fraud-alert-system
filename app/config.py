@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     sqs_queue_url: str = ""
     dynamodb_table_name: str = ""
     local_fallback_enabled: bool = True
+    enable_auth: bool = False
+    jwt_secret_key: str = "dev-secret-change-me"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
 
 
 @lru_cache

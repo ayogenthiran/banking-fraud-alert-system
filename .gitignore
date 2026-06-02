@@ -16,10 +16,11 @@ env/
 .coverage
 htmlcov/
 
-# IDE
+# IDE / tooling
 .idea/
 .vscode/
 .cursor/
+.codacy/
 *.swp
 *.swo
 

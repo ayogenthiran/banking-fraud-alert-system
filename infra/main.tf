@@ -27,6 +27,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 data "aws_vpc" "default" {
   default = true
 }
@@ -99,6 +101,136 @@ resource "aws_sns_topic_subscription" "fraud_alerts_email" {
   topic_arn = aws_sns_topic.fraud_alerts.arn
   protocol  = "email"
   endpoint  = var.alert_email
+}
+
+# ---------------------------------------------------------------------------
+# S3 + Kinesis Firehose for future ML analytics on flagged transactions
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "fraud_analytics" {
+  bucket = "${var.project_name}-fraud-analytics-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "fraud_analytics" {
+  bucket = aws_s3_bucket.fraud_analytics.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "fraud_analytics" {
+  bucket = aws_s3_bucket.fraud_analytics.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "fraud_analytics" {
+  bucket = aws_s3_bucket.fraud_analytics.id
+
+  rule {
+    id     = "expire-analytics-data"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "firehose" {
+  name              = "/aws/kinesisfirehose/${var.project_name}-fraud-analytics-stream"
+  retention_in_days = 14
+}
+
+resource "aws_cloudwatch_log_stream" "firehose_s3_delivery" {
+  name           = "S3Delivery"
+  log_group_name = aws_cloudwatch_log_group.firehose.name
+}
+
+data "aws_iam_policy_document" "firehose_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["firehose.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "firehose" {
+  name               = "${var.project_name}-firehose-role"
+  assume_role_policy = data.aws_iam_policy_document.firehose_assume_role.json
+}
+
+data "aws_iam_policy_document" "firehose_permissions" {
+  statement {
+    sid    = "WriteAnalyticsDataToS3"
+    effect = "Allow"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:ListBucketMultipartUploads",
+      "s3:PutObject",
+    ]
+    resources = [
+      aws_s3_bucket.fraud_analytics.arn,
+      "${aws_s3_bucket.fraud_analytics.arn}/*",
+    ]
+  }
+
+  statement {
+    sid    = "WriteFirehoseDeliveryLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+    ]
+    resources = [
+      aws_cloudwatch_log_group.firehose.arn,
+      "${aws_cloudwatch_log_group.firehose.arn}:log-stream:*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "firehose" {
+  name   = "${var.project_name}-firehose-policy"
+  role   = aws_iam_role.firehose.id
+  policy = data.aws_iam_policy_document.firehose_permissions.json
+}
+
+resource "aws_kinesis_firehose_delivery_stream" "fraud_analytics" {
+  name        = "${var.project_name}-fraud-analytics-stream"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn            = aws_iam_role.firehose.arn
+    bucket_arn          = aws_s3_bucket.fraud_analytics.arn
+    prefix              = "flagged-transactions/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    error_output_prefix = "errors/!{firehose:error-output-type}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    buffering_interval  = 60
+    buffering_size      = 1
+
+    cloudwatch_logging_options {
+      enabled         = true
+      log_group_name  = aws_cloudwatch_log_group.firehose.name
+      log_stream_name = aws_cloudwatch_log_stream.firehose_s3_delivery.name
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.firehose]
 }
 
 # ---------------------------------------------------------------------------
@@ -275,10 +407,6 @@ resource "aws_ecs_task_definition" "api" {
           value = aws_sqs_queue.flagged_transactions.url
         },
         {
-          name  = "DYNAMODB_TABLE_NAME"
-          value = aws_dynamodb_table.flagged_transactions.name
-        },
-        {
           name  = "LOCAL_FALLBACK_ENABLED"
           value = "false"
         }
@@ -339,7 +467,7 @@ resource "aws_iam_role" "lambda" {
 }
 
 # ---------------------------------------------------------------------------
-# IAM policy: SQS read + DynamoDB write + SNS publish + CloudWatch Logs
+# IAM policy: SQS read + DynamoDB write + Firehose copy + SNS publish + CloudWatch Logs
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "lambda_permissions" {
   # Read messages from the SQS queue (required for the event source mapping).
@@ -380,6 +508,17 @@ data "aws_iam_policy_document" "lambda_permissions" {
     effect    = "Allow"
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.fraud_alerts.arn]
+  }
+
+  # Send a copy of each processed flagged transaction to Firehose for analytics.
+  statement {
+    sid    = "WriteFraudAnalyticsStream"
+    effect = "Allow"
+    actions = [
+      "firehose:PutRecord",
+      "firehose:PutRecordBatch",
+    ]
+    resources = [aws_kinesis_firehose_delivery_stream.fraud_analytics.arn]
   }
 
   # Write logs to CloudWatch Logs.
@@ -442,8 +581,10 @@ resource "aws_lambda_function" "processor" {
 
   environment {
     variables = {
+      AWS_REGION             = var.aws_region
       ENVIRONMENT            = "aws"
       DYNAMODB_TABLE_NAME    = aws_dynamodb_table.flagged_transactions.name
+      FIREHOSE_STREAM_NAME   = aws_kinesis_firehose_delivery_stream.fraud_analytics.name
       LOCAL_FALLBACK_ENABLED = "false"
       SNS_TOPIC_ARN          = aws_sns_topic.fraud_alerts.arn
     }
