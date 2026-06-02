@@ -4,8 +4,10 @@ This Terraform module provisions the core AWS resources for the deployed
 fraud-alert system:
 
 ```text
-ALB -> ECS Fargate FastAPI service -> SQS -> Lambda -> DynamoDB + SNS
+ALB -> ECS Fargate FastAPI service -> SQS -> Lambda -> DynamoDB + SNS + Firehose -> S3
 ```
+
+CloudWatch alarms on SQS backlog and Lambda errors publish to the SNS fraud-alerts topic.
 
 The FastAPI service is built from the root `Dockerfile`, pushed to ECR, and run
 on ECS Fargate behind a public Application Load Balancer.
@@ -21,6 +23,8 @@ on ECS Fargate behind a public Application Load Balancer.
 - SNS topic for customer fraud alerts, with an optional email subscription.
 - IAM roles and policies for ECS and Lambda.
 - KMS key for DynamoDB server-side encryption.
+- S3 bucket and Kinesis Firehose delivery stream for flagged-transaction analytics.
+- CloudWatch alarms for SQS backlog and Lambda processing errors.
 - SQS event source mapping for Lambda.
 
 ## Usage
