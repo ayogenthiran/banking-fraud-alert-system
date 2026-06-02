@@ -55,6 +55,8 @@ If no fraud rules are triggered, the transaction is marked as `approved`.
 
 The optional `bank_id` field supports multi-tenant fraud thresholds. If `bank_id` is missing or unknown, the system uses the default thresholds.
 
+> **Note:** For this assignment demo, the different-location rule compares location strings and stores recent account locations in memory. In production, this state would be stored in DynamoDB or Redis so it works across ECS restarts and multiple running tasks.
+
 ## API Usage
 
 ### Health Check

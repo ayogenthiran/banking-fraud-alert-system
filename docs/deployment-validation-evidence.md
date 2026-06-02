@@ -171,7 +171,7 @@ Output before email confirmation:
       "SubscriptionArn": "PendingConfirmation",
       "Owner": "<AWS_ACCOUNT_ID>",
       "Protocol": "email",
-      "Endpoint": "ayogenthiran.ai@gmail.com",
+      "Endpoint": "you@example.com",
       "TopicArn": "arn:aws:sns:us-east-1:<AWS_ACCOUNT_ID>:banking-fraud-alert-system-fraud-alerts"
     }
   ]
@@ -187,7 +187,7 @@ Output after email confirmation:
       "SubscriptionArn": "arn:aws:sns:us-east-1:<AWS_ACCOUNT_ID>:banking-fraud-alert-system-fraud-alerts:68d7868f-6ddb-4f91-9e06-60ae97b035f6",
       "Owner": "<AWS_ACCOUNT_ID>",
       "Protocol": "email",
-      "Endpoint": "ayogenthiran.ai@gmail.com",
+      "Endpoint": "you@example.com",
       "TopicArn": "arn:aws:sns:us-east-1:<AWS_ACCOUNT_ID>:banking-fraud-alert-system-fraud-alerts"
     }
   ]
